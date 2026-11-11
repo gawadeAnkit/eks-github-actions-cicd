@@ -1,0 +1,12 @@
+{
+  "name": "cloud-api-service",
+  "version": "1.0.0",
+  "description": "Production microservice for CI/CD with AWS EKS & GitHub Actions",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/app.test.js"
+  },
+  "keywords": ["devops", "eks", "aws", "docker", "ci-cd"],
+  "license": "MIT"
+}
