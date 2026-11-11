@@ -8,5 +8,6 @@
     "test": "node --test test/app.test.js"
   },
   "keywords": ["devops", "eks", "aws", "docker", "ci-cd"],
+  "author": "gawadeAnkit",
   "license": "MIT"
 }
