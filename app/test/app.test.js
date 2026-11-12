@@ -42,16 +42,12 @@ function simulateRequest({ method = 'GET', url = '/', headers = {} }) {
 }
 
 describe('Cloud API Microservice Unit & Security Tests', () => {
-  test('GET / returns 200, valid JSON, and security headers', async () => {
+  test('GET / returns 200 HTML dashboard and security headers', async () => {
     const res = await simulateRequest({ method: 'GET', url: '/' });
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
     assert.strictEqual(res.headers['x-frame-options'], 'DENY');
-
-    const data = res.json();
-    assert.strictEqual(data.status, 'success');
-    assert.ok(data.version);
-    assert.ok(data.timestamp);
+    assert.ok(res.body.includes('LIVE ON AMAZON EKS'));
   });
 
   test('GET /health (Liveness Probe) returns 200 and healthy status', async () => {
