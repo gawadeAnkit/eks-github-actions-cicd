@@ -5,8 +5,10 @@ metadata:
   namespace: devops-demo
   labels:
     app: cloud-api
+    tier: backend
 spec:
   replicas: 2
+  revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -19,19 +21,38 @@ spec:
     metadata:
       labels:
         app: cloud-api
+        tier: backend
     spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cloud-api-container
           image: <IMAGE_PLACEHOLDER>
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
               name: http
+              protocol: TCP
           env:
             - name: NODE_ENV
               value: "production"
             - name: PORT
               value: "3000"
+            - name: APP_VERSION
+              value: "<VERSION_PLACEHOLDER>"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           resources:
             requests:
               cpu: "100m"
@@ -39,6 +60,12 @@ spec:
             limits:
               cpu: "300m"
               memory: "256Mi"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold: 6
+            periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /health

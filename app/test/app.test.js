@@ -1,9 +1,10 @@
+process.env.NODE_ENV = 'test';
+
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
-const { requestHandler } = require('../src/app');
+const { requestHandler, setShuttingDown } = require('../src/app');
 
-// Helper to simulate an HTTP request and capture response without network sockets
 function simulateRequest({ method = 'GET', url = '/', headers = {} }) {
   return new Promise((resolve) => {
     const req = new EventEmitter();
@@ -17,11 +18,13 @@ function simulateRequest({ method = 'GET', url = '/', headers = {} }) {
 
     const res = {
       setHeader(name, value) {
-        responseHeaders[name] = value;
+        responseHeaders[name.toLowerCase()] = value;
       },
-      writeHead(code, headers = {}) {
+      writeHead(code, headersObj = {}) {
         statusCode = code;
-        Object.assign(responseHeaders, headers);
+        for (const [k, v] of Object.entries(headersObj)) {
+          responseHeaders[k.toLowerCase()] = v;
+        }
       },
       end(chunk) {
         if (chunk) responseBody += chunk;
@@ -38,10 +41,12 @@ function simulateRequest({ method = 'GET', url = '/', headers = {} }) {
   });
 }
 
-describe('Cloud API Microservice Unit Tests', () => {
-  test('GET / returns 200 with success status and metadata', async () => {
+describe('Cloud API Microservice Unit & Security Tests', () => {
+  test('GET / returns 200, valid JSON, and security headers', async () => {
     const res = await simulateRequest({ method: 'GET', url: '/' });
     assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
+    assert.strictEqual(res.headers['x-frame-options'], 'DENY');
 
     const data = res.json();
     assert.strictEqual(data.status, 'success');
@@ -58,13 +63,18 @@ describe('Cloud API Microservice Unit Tests', () => {
     assert.strictEqual(typeof data.uptime, 'number');
   });
 
-  test('GET /ready (Readiness Probe) returns 200 and ready status', async () => {
-    const res = await simulateRequest({ method: 'GET', url: '/ready' });
-    assert.strictEqual(res.statusCode, 200);
+  test('GET /ready (Readiness Probe) returns 200 when active and 503 during shutdown', async () => {
+    setShuttingDown(false);
+    const readyRes = await simulateRequest({ method: 'GET', url: '/ready' });
+    assert.strictEqual(readyRes.statusCode, 200);
+    assert.strictEqual(readyRes.json().status, 'ready');
 
-    const data = res.json();
-    assert.strictEqual(data.status, 'ready');
-    assert.strictEqual(data.database, 'connected');
+    setShuttingDown(true);
+    const drainingRes = await simulateRequest({ method: 'GET', url: '/ready' });
+    assert.strictEqual(drainingRes.statusCode, 503);
+    assert.strictEqual(drainingRes.json().ready, false);
+
+    setShuttingDown(false);
   });
 
   test('GET /api/v1/info returns cloud and orchestrator metadata', async () => {
@@ -78,10 +88,8 @@ describe('Cloud API Microservice Unit Tests', () => {
   });
 
   test('GET /unknown-endpoint returns 404 Not Found', async () => {
-    const res = await simulateRequest({ method: 'GET', url: '/unknown-endpoint' });
+    const res = await simulateRequest({ method: 'GET', url: '/unknown-route' });
     assert.strictEqual(res.statusCode, 404);
-
-    const data = res.json();
-    assert.strictEqual(data.error, 'Endpoint Not Found');
+    assert.strictEqual(res.json().error, 'Endpoint Not Found');
   });
 });

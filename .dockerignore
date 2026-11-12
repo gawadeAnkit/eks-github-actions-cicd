@@ -4,6 +4,6 @@ npm-debug.log
 .github
 .gitignore
 *.md
-app/test
 Dockerfile
 .dockerignore
+k8s

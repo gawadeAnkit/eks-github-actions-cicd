@@ -4,3 +4,4 @@ metadata:
   name: devops-demo
   labels:
     app.kubernetes.io/part-of: cloud-api-service
+

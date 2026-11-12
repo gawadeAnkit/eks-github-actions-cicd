@@ -1,29 +1,38 @@
 # ========================================================
-# Production Microservice Container Image
-# Base Image: Lightweight Alpine Linux with Node.js LTS
+# Stage 1: Verification & Build Stage
 # ========================================================
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 
-# Set working directory inside container
-WORKDIR /usr/src/app
+WORKDIR /build
 
-# Set container environment variables
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# Copy application source code and descriptors
 COPY app/package.json ./
 COPY app/src ./src
+COPY app/test ./test
 
-# Security Best Practice: Run application as non-root user
+# Execute unit tests inside build stage as an additional safety gate
+RUN node --test test/app.test.js
+
+# ========================================================
+# Stage 2: Minimal Hardened Production Runtime
+# ========================================================
+FROM node:20-alpine AS runner
+
+WORKDIR /usr/src/app
+
+ENV NODE_ENV=production \
+    PORT=3000
+
+# Copy only runtime artifacts with non-root ownership
+COPY --chown=node:node --from=builder /build/package.json ./
+COPY --chown=node:node --from=builder /build/src ./src
+
+# Run as unprivileged non-root user
 USER node
 
-# Expose application port
 EXPOSE 3000
 
-# Container-level health check matching Kubernetes liveness endpoint
+# Container-level health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://localhost:3000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-# Default container startup command
 CMD ["node", "src/server.js"]

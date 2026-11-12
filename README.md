@@ -1,6 +1,6 @@
-# End-to-End CI/CD Pipeline on AWS EKS using GitHub Actions
+# Production CI/CD Pipeline on AWS EKS with GitHub Actions
 
-A production-grade, secure Continuous Integration and Continuous Deployment (CI/CD) pipeline built with **GitHub Actions**, containerized with **Docker**, stored in **Amazon ECR**, and deployed onto a high-availability **Amazon EKS (Kubernetes)** cluster with automated health checks and zero-downtime rolling updates.
+An enterprise-hardened, end-to-end Continuous Integration, Security Scanning (DevSecOps), and Continuous Deployment (CI/CD) pipeline built with **GitHub Actions**, multi-stage **Docker**, **Trivy**, **Amazon ECR**, and **Amazon EKS (Kubernetes)**.
 
 ---
 
@@ -8,31 +8,43 @@ A production-grade, secure Continuous Integration and Continuous Deployment (CI/
 
 ```mermaid
 flowchart LR
-    A["Developer Commit / PR"] --> B["GitHub Actions Triggered"]
-    subgraph CI ["Continuous Integration (CI)"]
-        B --> C["Automated Unit Tests\n(node --test)"]
-        C --> D["Build Docker Image\n(node:20-alpine)"]
-        D --> E["Tag with Git SHA & latest"]
+    A["Developer Push / PR\n(main branch)"] --> B["GitHub Actions CI"]
+    subgraph CI ["CI & DevSecOps Gate"]
+        B --> C["Syntax Check & Unit Tests\n(node --check & node --test)"]
+        C --> D["Multi-Stage Docker Build\n(node:20-alpine)"]
+        D --> E["Trivy Vulnerability Scan\n(CRITICAL / HIGH CVEs)"]
     end
-    subgraph CD ["Continuous Deployment (CD)"]
-        E --> F["Authenticate & Push\nto Amazon ECR"]
-        F --> G["Configure Kubeconfig\n(aws eks)"]
-        G --> H["Deploy Manifests\nto Amazon EKS"]
-        H --> I["Rollout Verification\n(kubectl rollout status)"]
+    subgraph CD ["CD & EKS Rollout"]
+        E --> F["Push Tagged Image (SHA + latest)\nto Amazon ECR"]
+        F --> G["Update Kubeconfig\n(aws eks)"]
+        G --> H["Apply Hardened K8s Manifests\n(Deployment, Service, HPA, PDB)"]
+        H --> I{"Rollout Healthy?"}
+        I -- Yes --> J["Zero-Downtime Live Traffic"]
+        I -- No --> K["Automatic Rollback\n(kubectl rollout undo)"]
     end
-    I --> J["High Availability Pods\nBehind LoadBalancer Service"]
 ```
 
 ---
 
-## Assessment Requirements Mapped
+## Production Best Practices Implemented
 
-| Requirement | Implementation Detail | Location |
-| :--- | :--- | :--- |
-| **1. Runs tests** | Automated unit & probe test suite covering health, readiness, and routing. Runs before any build step. | `app/test/app.test.js` |
-| **2. Builds Docker image** | Security-hardened container based on `node:20-alpine`, runs as non-root `node` user with integrated `HEALTHCHECK`. | `Dockerfile` |
-| **3. Pushes to ECR** | Authenticates via `aws-actions/amazon-ecr-login` and pushes tagged image with `${{ github.sha }}` and `latest`. | `.github/workflows/ci-cd.yml` |
-| **4. Deploys to Kubernetes** | Updates Kubernetes context with `aws eks update-kubeconfig`, substitutes image tag, and applies manifests with rolling updates and verification. | `k8s/` & `.github/workflows/ci-cd.yml` |
+### 1. Application Hardening (`app/`)
+- **Zero Third-Party Dependencies**: Built using native Node.js (`node:http`, `node:test`) to eliminate supply-chain risks and reduce image size.
+- **Structured JSON Logging**: Outputs timestamp, HTTP method, path, status code, and latency (`durationMs`) for CloudWatch / ELK ingestion.
+- **HTTP Security Headers**: Enforces `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Cache-Control: no-store`.
+- **Zero-Downtime Graceful Shutdown**: On `SIGTERM`, `/ready` immediately returns `503 Service Unavailable` so the LoadBalancer stops routing new requests while `server.close()` drains active connections cleanly.
+
+### 2. Container & DevSecOps Best Practices (`Dockerfile`, `.github/workflows/ci-cd.yml`)
+- **Multi-Stage Build**: Runs unit tests in the `builder` stage and copies only runtime files to a minimal `node:20-alpine` `runner` stage.
+- **Least Privilege Container**: Runs as unprivileged non-root `USER node` (UID `1000`).
+- **Trivy Vulnerability Scanning**: Scans the built container image for `CRITICAL` and `HIGH` CVEs before pushing to Amazon ECR.
+- **Immutable SHA Tagging & Concurrency Control**: Tags images with `${{ github.sha }}` for full commit traceability and uses GitHub Actions `concurrency` groups to prevent race conditions.
+- **Automated Rollback**: Automatically runs `kubectl rollout undo` if `kubectl rollout status` fails.
+
+### 3. Kubernetes Hardening (`k8s/`)
+- **Pod & Container `securityContext`**: Enforces `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `automountServiceAccountToken: false`, `seccompProfile: RuntimeDefault`, and drops `ALL` Linux capabilities.
+- **All 3 Kubernetes Probes**: Configured `startupProbe`, `livenessProbe` (`/health`), and `readinessProbe` (`/ready`).
+- **High Availability**: `RollingUpdate` (`maxSurge: 1`, `maxUnavailable: 0`), `PodDisruptionBudget` (`minAvailable: 1`), and `HorizontalPodAutoscaler` (2–5 replicas at 70% CPU).
 
 ---
 
@@ -42,141 +54,60 @@ flowchart LR
 Task-1-CICD-EKS/
 ├── .github/
 │   └── workflows/
-│       └── ci-cd.yml            # CI/CD pipeline definition
+│       └── ci-cd.yml            # CI/CD + Trivy scan + Auto-rollback workflow
 ├── app/
-│   ├── package.json             # Service metadata and test scripts
+│   ├── package.json             # Service descriptors & test scripts
 │   ├── src/
-│   │   ├── app.js               # REST API with /health and /ready endpoints
-│   │   └── server.js            # Server entrypoint with graceful shutdown (SIGTERM/SIGINT)
+│   │   ├── app.js               # REST API, JSON logs, security headers, probes
+│   │   └── server.js            # Entrypoint with graceful SIGTERM shutdown
 │   └── test/
-│       └── app.test.js          # Automated unit test suite
+│       └── app.test.js          # Automated unit & security test suite
 ├── k8s/
-│   ├── namespace.yaml           # Dedicated Kubernetes namespace (devops-demo)
-│   ├── deployment.yaml          # 2 Replicas, RollingUpdate strategy, liveness/readiness probes
-│   └── service.yaml             # LoadBalancer service exposing port 80 -> 3000
-├── Dockerfile                   # Minimal production-ready container definition
-├── .dockerignore                # Build context exclusion rules
-└── README.md                    # Project documentation
+│   ├── namespace.yaml           # Namespace (devops-demo)
+│   ├── deployment.yaml          # Security-hardened Deployment + 3 probes
+│   ├── service.yaml             # LoadBalancer Service (80 -> 3000)
+│   ├── hpa.yaml                 # HorizontalPodAutoscaler (CPU 70%)
+│   └── pdb.yaml                 # PodDisruptionBudget (minAvailable: 1)
+├── Dockerfile                   # Multi-stage non-root Alpine container
+├── .dockerignore                # Excludes .git, docs, workflows, manifests
+└── README.md                    # Documentation
 ```
 
 ---
 
-## Step-by-Step AWS Setup Guide
+## Local Testing
 
-### 1. Amazon ECR (Elastic Container Registry)
-Create a private repository in your chosen AWS Region (`us-east-1`):
-```bash
-aws ecr create-repository \
-    --repository-name cloud-api-service \
-    --region us-east-1 \
-    --image-scanning-configuration scanOnPush=true
-```
-
-### 2. Amazon EKS Cluster
-If you already have a cluster named `devops-eks-cluster`:
-```bash
-aws eks describe-cluster --name devops-eks-cluster --region us-east-1
-```
-Or create a cost-effective test cluster with `eksctl`:
-```bash
-eksctl create cluster \
-    --name devops-eks-cluster \
-    --region us-east-1 \
-    --nodegroup-name standard-workers \
-    --node-type t3.medium \
-    --nodes 2 \
-    --nodes-min 1 \
-    --nodes-max 3 \
-    --managed
-```
-
-### 3. GitHub Repository Secrets
-Navigate to **GitHub Repository** -> **Settings** -> **Secrets and variables** -> **Actions** -> **New repository secret**:
-
-| Secret Name | Value | Purpose |
-| :--- | :--- | :--- |
-| `AWS_ACCESS_KEY_ID` | `AKIA...` | IAM user with permissions to ECR and EKS |
-| `AWS_SECRET_ACCESS_KEY` | `wJalr...` | AWS Secret Access Key |
-
-> **Security Note:** In enterprise environments, AWS IAM OIDC (OpenID Connect) role assumption is preferred over long-lived keys. This pipeline supports IAM credentials and is easily upgradeable to OIDC via `role-to-assume`.
-
-### 4. EKS IAM Access Permission
-Ensure your IAM user or role has access to the EKS cluster API. If using EKS Access Entries:
-```bash
-aws eks create-access-entry \
-    --cluster-name devops-eks-cluster \
-    --principal-arn arn:aws:iam::<ACCOUNT_ID>:user/<USER_OR_CI_ROLE> \
-    --region us-east-1
-
-aws eks associate-access-policy \
-    --cluster-name devops-eks-cluster \
-    --principal-arn arn:aws:iam::<ACCOUNT_ID>:user/<USER_OR_CI_ROLE> \
-    --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
-    --access-scope type=cluster \
-    --region us-east-1
-```
-
----
-
-## Local Verification & Testing
-
-### 1. Run Unit Tests Locally
-```bash
+```powershell
+# Run syntax check and unit tests
 cd app
+node --check src/app.js
+node --check src/server.js
 npm test
-```
-**Output:**
-```text
-▶ Cloud API Microservice Unit Tests
-  ✔ GET / returns 200 with success status and metadata
-  ✔ GET /health (Liveness Probe) returns 200 and healthy status
-  ✔ GET /ready (Readiness Probe) returns 200 and ready status
-  ✔ GET /api/v1/info returns cloud and orchestrator metadata
-  ✔ GET /unknown-endpoint returns 404 Not Found
-✔ Cloud API Microservice Unit Tests
-ℹ tests 5 | pass 5 | fail 0
-```
 
-### 2. Build and Test Docker Container
-```bash
-# Build image
+# Build & run locally with Docker
+cd ..
 docker build -t cloud-api-service:local .
-
-# Run container locally
-docker run -d -p 3000:3000 --name test-api cloud-api-service:local
-
-# Test endpoints
-curl http://localhost:3000/
+docker run -d -p 3000:3000 --read-only --name api-test cloud-api-service:local
 curl http://localhost:3000/health
-curl http://localhost:3000/ready
-
-# Clean up
-docker stop test-api && docker rm test-api
+docker stop api-test; docker rm api-test
 ```
 
 ---
 
-## Production & Interview Talking Points
+## AWS & GitHub Setup Steps
 
-1. **Why Alpine and Non-Root User in Docker?**
-   - We used `node:20-alpine` to minimize image footprint (< 150MB) and attack surface.
-   - We explicitly switch to `USER node` to satisfy the principle of least privilege, preventing container escape attacks from gaining host root access.
-
-2. **How does Zero Downtime Deployment work in Kubernetes?**
-   - The deployment manifest specifies:
-     ```yaml
-     strategy:
-       type: RollingUpdate
-       rollingUpdate:
-         maxSurge: 1
-         maxUnavailable: 0
-     ```
-   - Kubernetes spins up a new pod with the new image version, waits for its `readinessProbe` to pass on `/ready`, redirects live traffic to it, and only then terminates the old pod.
-
-3. **How does Graceful Shutdown work?**
-   - On pod termination, Kubernetes sends `SIGTERM`. The application catches `SIGTERM`, stops taking new connections via `server.close()`, drains existing in-flight HTTP requests, and shuts down cleanly within the grace period.
-
-4. **Pipeline Rollout Verification:**
-   - Instead of blindly triggering `kubectl apply`, our CI/CD pipeline executes:
-     `kubectl rollout status deployment/cloud-api-deployment -n devops-demo --timeout=180s`
-   - If a pod crashes (e.g. `CrashLoopBackOff` or failed probe), the pipeline immediately fails and alerts the team without leaving the cluster in an inconsistent state.
+1. **Create Amazon ECR Repository**:
+   ```bash
+   aws ecr create-repository --repository-name cloud-api-service --region us-east-1 --image-scanning-configuration scanOnPush=true
+   ```
+2. **Create Amazon EKS Cluster**:
+   ```bash
+   eksctl create cluster --name devops-eks-cluster --region us-east-1 --nodegroup-name workers --node-type t3.small --nodes 2 --managed
+   ```
+3. **Configure GitHub Repository Secrets** (`Settings -> Secrets and variables -> Actions`):
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+4. **Push to GitHub (`gawadeAnkit`)**:
+   ```bash
+   git push -u origin main
+   ```
