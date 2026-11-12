@@ -1,0 +1,16 @@
+# Node & dependencies
+node_modules/
+npm-debug.log*
+
+# Terraform state & cache (never commit secrets or state)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.env
